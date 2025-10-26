@@ -1,0 +1,76 @@
+package com.bankingsystem.banking_system.security;
+
+import com.bankingsystem.banking_system.entity.User;
+import com.bankingsystem.banking_system.repository.UserRepository;
+import com.bankingsystem.banking_system.util.JwtUtil;
+import jakarta.servlet.FilterChain;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.HttpServletRequest;
+import jakarta.servlet.http.HttpServletResponse;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.web.authentication.WebAuthenticationDetailsSource;
+import org.springframework.stereotype.Component;
+import org.springframework.web.filter.OncePerRequestFilter;
+
+import java.io.IOException;
+import java.util.List;
+import java.util.stream.Collectors;
+@Slf4j
+@Component
+@RequiredArgsConstructor
+public class JwtAuthenticationFilter extends OncePerRequestFilter {
+
+    private final JwtUtil jwtUtil;
+    private final UserRepository userRepository;
+
+    @Override
+    protected void doFilterInternal(HttpServletRequest request,
+                                    HttpServletResponse response,
+                                    FilterChain filterChain) throws ServletException, IOException {
+
+        // 1️⃣ Get Authorization header
+        String authHeader = request.getHeader("Authorization");
+        String token = null;
+        Long userId = null;
+
+        // 2️⃣ Extract token if it starts with "Bearer "
+        if (authHeader != null && authHeader.startsWith("Bearer ")) {
+            token = authHeader.substring(7);
+            try {
+                userId = jwtUtil.getUserIdFromToken(token);
+            } catch (Exception e) {
+                log.error("JWT token extraction failed: {}", e.getMessage());
+            }
+        }
+
+        // 3️⃣ Validate token and set authentication
+        if (userId != null && SecurityContextHolder.getContext().getAuthentication() == null) {
+            User user = userRepository.findById(userId).orElse(null);
+
+            if (user != null && jwtUtil.validateToken(token)) {
+
+                // Extract roles from User entity and map to GrantedAuthorities
+                List<SimpleGrantedAuthority> authorities = user.getUserRoles().stream()
+                        .map(ur -> new SimpleGrantedAuthority(ur.getRole().getRoleName()))
+                        .collect(Collectors.toList());
+
+                // Create authentication token
+                UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
+                        user, null, authorities
+                );
+
+                authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+
+                // 4️⃣ Set authentication in Spring Security context
+                SecurityContextHolder.getContext().setAuthentication(authentication);
+            }
+        }
+
+        // 5️⃣ Continue filter chain
+        filterChain.doFilter(request, response);
+    }
+}
